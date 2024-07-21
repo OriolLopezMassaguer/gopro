@@ -1,5 +1,4 @@
 {-# LANGUAGE ScopedTypeVariables #-}
-
 module GoPro.ConfigFile (loadConfigFile) where
 
 import           Control.Applicative    ((<|>))
@@ -9,7 +8,6 @@ import           Data.Maybe             (fromMaybe)
 import           Data.Text              (Text)
 import qualified Toml
 import           Toml                   (TomlCodec, (.=))
-
 import           GoPro.Commands
 
 data Config = Config
@@ -19,6 +17,7 @@ data Config = Config
   , downloadConcurrency :: Maybe Int
   , chunkSize           :: Maybe Integer
   , referenceDir        :: Maybe FilePath
+  --, year                :: Maybe String
   } deriving Show
 
 emptyConfig :: Config
@@ -32,6 +31,7 @@ codec = Config
     <*> Toml.dioptional (Toml.validate (atLeast 1) Toml._Int "download.concurrency") .= downloadConcurrency
     <*> Toml.dioptional (Toml.validate (atLeast (5*1024*1024)) Toml._Integer "upload.chunkSize") .= chunkSize
     <*> Toml.dioptional (Toml.string "referenceDir") .= referenceDir
+   --  <*> Toml.dioptional (Toml.string "year") .= year
   where
     atLeast :: (Show n, Num n, Ord n) => n -> n -> Either Text n
     atLeast n i
@@ -42,13 +42,15 @@ readConfig :: MonadIO m => FilePath -> m Config
 readConfig fn = liftIO $ catch (Toml.decodeFile codec fn) (\(_ :: IOError) -> pure emptyConfig)
 
 mergeConfig :: Options -> Config -> Options
-mergeConfig opt@Options{..} Config{..} = opt{
+mergeConfig opt@Options {optDBPath, optStaticPath, optUploadConcurrency, optDownloadConcurrency, optChunkSize, optReferenceDir} 
+         Config {dbPath, staticPath, uploadConcurrency, downloadConcurrency, chunkSize, referenceDir} = opt{
   optDBPath = fromMaybe optDBPath dbPath,
   optStaticPath = fromMaybe optStaticPath staticPath,
   optUploadConcurrency = fromMaybe optUploadConcurrency uploadConcurrency,
   optDownloadConcurrency = fromMaybe optDownloadConcurrency downloadConcurrency,
   optChunkSize = fromMaybe optChunkSize chunkSize,
   optReferenceDir = referenceDir <|> optReferenceDir
+  -- ,optYear = optYear <|> year
   }
 
 -- | Load a TOML config file with the

@@ -5,11 +5,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeApplications  #-}
 {-# LANGUAGE ViewPatterns      #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Redundant bracket" #-}
+{-# OPTIONS_GHC -Wno-unused-do-bind #-}
 
 module GoPro.Commands.Backup (runBackup, runStoreMeta, runStoreMeta', runReceiveS3CopyQueue,
                               runLocalBackup, runDownload, runClearMeta, extractMedia, extractOrig) where
-
-
+import System.Process ( system )
 import           Amazonka                        (send)
 import           Amazonka.Lambda                 (InvocationType (..), newInvoke)
 import           Amazonka.S3                     (BucketName (..))
@@ -46,10 +48,10 @@ import           Data.Time.Format
 import           Network.HTTP.Simple             (getResponseBody, httpSource, parseRequest)
 import           Safe.Exact                      (zipWithExactMay)
 import qualified Shelly                          as Sh
-import           System.Directory                (createDirectoryIfMissing, doesFileExist, renameDirectory, renameFile)
+import           System.Directory                (createDirectoryIfMissing, doesFileExist, renameFile)
 import           System.Directory.PathWalk       (WalkStatus (..), pathWalkInterruptible)
 import           System.FilePath.Posix           (takeDirectory, takeExtension, takeFileName, (</>))
-import           System.Posix.Files              (createLink, setFileTimes)
+import           System.Posix.Files              (createLink)
 import           UnliftIO                        (concurrently, mapConcurrently, mapConcurrently_,
                                                   pooledMapConcurrentlyN_)
 
@@ -97,30 +99,35 @@ downloadLocally path extract Medium{..} = do
   locals <- fromMaybe mempty <$> traverse GPF.fromDirectoryFull refdir
   let todo = extract _medium_id vars
       srcs = maybe [] NE.toList $ Map.lookup (vars ^. filename) locals
-  copyLocal todo srcs
+      todo2 = filter (\(a,_,_) -> ("-var-" `isInfixOf` a)) (filter (\(a,_,_)-> ("-source" `isInfixOf` a)) todo)
+      --todo3 = if _medium_created_at >= ((read "2024-01-01")::UTCTime) then [] else todo2
+  copyLocal todo2 srcs
+  pooledMapConcurrentlyN_ 5 downloadNew todo2
 
-  pooledMapConcurrentlyN_ 5 downloadNew todo
-
-  linkNames (filter ("-var-source" `isInfixOf`) . fmap (\(a,_,_) -> a) $ todo)
-
-  -- This is mildly confusing since the path inherently has the mid in the path.
+  logInfoL ["Completed download ", tshow _medium_id]
   liftIO $ do
     createDirectoryIfMissing True (takeDirectory midPath)
-    renameDirectory (tmpdir </> unpack _medium_id) midPath
-    setFileTimes midPath (toEpochTime _medium_captured_at) (toEpochTime _medium_captured_at)
-  logInfoL ["Completed backup of ", tshow _medium_id]
-
+  
+  linkNames (filter ("-source" `isInfixOf`) . fmap (\(a,b,c) -> a) $ todo)
+  -- -- removeDirectory midPath
+  -- -- This is mildly confusing since the path inherently has the mid in the path.
+  -- liftIO $ do
+  --   createDirectoryIfMissing True (takeDirectory midPath)
+  --   renameDirectory (tmpdir </> unpack _medium_id) midPath
+  --   setFileTimes midPath (toEpochTime _medium_captured_at) (toEpochTime _medium_captured_at)
+  --   -- logInfoL ["Create Ren " , tshow  midPath ," ",tshow (tmpdir </> unpack _medium_id)]
+  --   liftIO $ system $ "rmdir " ++  midPath  
+  
+  -- logInfoL ["Completed backup of ", tshow midPath]
   where
-    midPath = path </> formatTime defaultTimeLocale "%0Y/%m" _medium_captured_at </> unpack _medium_id
+    midPath = path </> formatTime defaultTimeLocale "%0Y/%m/%d" _medium_captured_at </> unpack _medium_id
     tmpdir = path </> "tmp"
-
     tmpFilename k = tmpdir </> (unpack . fromJust . stripPrefix "derivatives/") k
 
     store :: (MonadLogger m, MonadIO m) => FilePath -> (FilePath -> m ()) -> m ()
     store dest a = liftIO (doesFileExist dest) >>= \exists ->
       if exists then logDbgL ["Using existing file: ", tshow dest]
       else a tmpfile *> liftIO (renameFile tmpfile dest)
-
       where
         tmpfile = dest <> ".tmp"
 
@@ -141,10 +148,8 @@ downloadLocally path extract Medium{..} = do
 
     download (k, _, u) dest = recoverAll policy $ \r -> do
       liftIO $ createDirectoryIfMissing True dir
-      logDbgL ["Fetching ", tshow _medium_id, " ", k, " attempt ", tshow (rsIterNumber r)]
       req <- parseRequest u
       liftIO $ runConduitRes (httpSource req getResponseBody .| sinkFile dest)
-
         where
           dir = takeDirectory dest
           policy = exponentialBackoff 2000000 <> limitRetries 9
@@ -153,14 +158,21 @@ downloadLocally path extract Medium{..} = do
       fn <- MaybeT . pure $ _medium_filename
       gf <- MaybeT . pure $ GPF.parseGPFileName fn
       let links = zip names (iterate GPF.nextFile gf)
-      lift $ logDbgL ["Linking ", tshow names, " for ", tshow fn, tshow links]
+      --lift $ logDbgL ["Linking ", tshow names, " for ", tshow fn, tshow links]
+      
       for_ links $ \(bp, GPF.File{..}) -> lift $ do
         let existing = tmpFilename bp
             dir = takeDirectory existing
             new = dir </> _gpFilePath
-        logDbgL ["  linking ", tshow existing, " -> ", tshow new]
-        liftIO . optional $ createLink existing new
-
+        logDbgL ["existing ", tshow (existing)]
+        logDbgL ["existing ", tshow (new)]
+        logDbgL ["From ", tshow (takeDirectory new)]
+        logDbgL ["To ", tshow (takeDirectory midPath)]
+        logDbgL ["MP ", tshow (midPath)]
+        _ <- liftIO . optional $ renameFile existing new
+        liftIO . optional $ system $ "mv " ++ (takeDirectory new) ++ "/* " ++ " " ++ (takeDirectory midPath)  
+        -- sliftIO . optional $ system $ "rmdir " ++  midPath  
+        
     toEpochTime = fromIntegral @Int . floor . utcTimeToPOSIXSeconds
 
 
@@ -171,9 +183,8 @@ extractMedia mid fi = filter desirable . nubBy (\(_,_,u1) (_,_,u2) -> u1 == u2) 
                                                  otherFiles mid fi
                                                ]
   where
-
     -- Explicitly ignoring concats because they're derived and huge.
-    desirable (fn,_,_) = not ("-concat.mp4" `isSuffixOf` fn)
+    desirable (fn,_,_) = not ("-concat.mp4" `isSuffixOf` fn) || not ("-var-" `isSuffixOf` fn)
 
     ex p l = fi ^.. fileStuff . l . folded . to conv . folded
       where
@@ -225,7 +236,6 @@ runDownload ex paths mids = do
   have <- fold <$> liftIO (traverse findHave paths)
   db <- asks database
   let todo = filter (`Set.notMember` have) (NE.toList mids)
-  logDbgL ["todo: ", tshow todo]
   c <- asksOpt optDownloadConcurrency
   pooledMapConcurrentlyN_ c (one db) todo
 

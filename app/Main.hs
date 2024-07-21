@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -Wno-orphans #-}
 {-# LANGUAGE FlexibleContexts     #-}
 {-# LANGUAGE FlexibleInstances    #-}
 {-# LANGUAGE ScopedTypeVariables  #-}
@@ -25,7 +24,6 @@ import           Options.Applicative.Help.Levenshtein (editDistance)
 import           System.Directory                     (getHomeDirectory)
 import           System.FilePath.Posix                ((</>))
 import           System.IO                            (hFlush, hGetEcho, hSetEcho, stdin, stdout)
-
 import           GoPro.Commands
 import           GoPro.Commands.Backup
 import           GoPro.Commands.Config
@@ -49,16 +47,15 @@ options Options{..} = Options
   <*> switch (short 'v' <> long "verbose" <> help "enable debug logging")
   <*> option auto (short 'u' <> long "upload-concurrency" <> showDefault <> value optUploadConcurrency <> help "Upload concurrency")
   <*> option auto (short 'd' <> long "download-concurrency" <> showDefault <> value optDownloadConcurrency <> help "Download concurrency")
-  <*> option (atLeast (5*1024*1024)) (short 's' <> long "chunk-size"
-                                      <> showDefault <> value optChunkSize <> help "Upload chunk size.")
-  <*> (optional $ strOption (long "refdir" <> maybe mempty value optReferenceDir <> help "download reference directory"))
+  <*> option (atLeast (5*1024*1024)) (short 's' <> long "chunk-size" <> showDefault <> value optChunkSize <> help "Upload chunk size.")
+  <*> optional (strOption (long "refdir" <> showDefault <> maybe mempty value optReferenceDir <> help "download reference directory"))
+  -- <*> optional (strOption (long "year" <> showDefault <> maybe mempty value optYear <> help "year"))
   <*> hsubparser (command "auth" (info (pure AuthCmd) (progDesc "Authenticate to GoPro"))
                   <> command "reauth" (info (pure ReauthCmd) (progDesc "Refresh authentication credentials"))
                   <> command "sync" (info (pure SyncCmd) (progDesc "Sync recent data from GoPro Plus"))
                   <> command "refresh" (info refreshCmd (progDesc "Refresh individual media"))
                   <> command "createupload" (info createUpCmd (progDesc "Create an upload"))
-                  <> command "upload" (info uploadCmd
-                                       (progDesc "Optionally create an upload, then run all uploads"))
+                  <> command "upload" (info uploadCmd (progDesc "Optionally create an upload, then run all uploads"))
                   <> command "download" (info downloadCmd (progDesc "Download media to local path"))
                   <> command "createmulti" (info createMultiCmd (progDesc "Create a multipart upload"))
                   <> command "fetchall" (info (pure FetchAllCmd) (progDesc "Fully sync all metadata"))

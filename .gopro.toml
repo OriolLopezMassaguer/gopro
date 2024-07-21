@@ -1,0 +1,9 @@
+# database = "some.db"
+# Static path for the web server
+# staticPath = "/path/to/static/content"
+
+upload.concurrency = 4
+upload.chunkSize = 5242880
+download.concurrency = 20
+referenceDir = "/mnt/d/gopro_sync_media"
+#referenceDir = "."

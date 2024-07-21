@@ -12,8 +12,7 @@ import           Control.Concurrent.STM (TChan, atomically, writeTChan)
 import           Control.Monad          (MonadPlus (..), mzero)
 import           Control.Monad.Catch    (MonadCatch (..), MonadMask (..), MonadThrow (..), SomeException (..), catch)
 import           Control.Monad.IO.Class (MonadIO (..))
-import           Control.Monad.Logger   (Loc (..), LogLevel (..), LogSource, LogStr, MonadLogger (..), ToLogStr (..),
-                                         logDebugN, logErrorN, logInfoN, monadLoggerLog)
+import           Control.Monad.Logger   (Loc (..), LogLevel (..), LogSource, LogStr, MonadLogger (..), ToLogStr (..),logDebugN, logErrorN, logInfoN, monadLoggerLog)
 import           Control.Monad.Reader   (MonadReader, ReaderT (..), asks)
 import           Data.Cache             (Cache (..), fetchWithCache, newCache)
 import           Data.Foldable          (fold)
@@ -28,9 +27,10 @@ import           UnliftIO               (MonadUnliftIO (..), bracket_)
 import           GoPro.DB               (AuthResult (..), ConfigOption (..), Database (..))
 import           GoPro.DB.Postgres      (withPostgres)
 import           GoPro.DB.Sqlite        (withSQLite)
-import           GoPro.Logging
-import           GoPro.Notification
-import           GoPro.Plus.Auth
+import GoPro.Logging
+    ( mkLogChannel, notificationLogger, baseLogger )
+import GoPro.Notification ( Notification )
+import GoPro.Plus.Auth ( AuthInfo, HasGoProAuth(..), refreshAuth )
 import           GoPro.Plus.Media       (FileInfo, MediumID, MediumType)
 import           UnliftIO.MVar          (MVar, newEmptyMVar, putMVar, takeMVar)
 
@@ -45,7 +45,7 @@ data Command = AuthCmd
              | CreateUploadCmd (NonEmpty FilePath)
              | UploadCmd [FilePath]
              | CreateMultiCmd MediumType (NonEmpty FilePath)
-             | FetchAllCmd
+             | FetchAllCmd 
              | CleanupCmd
              | FixupCmd T.Text
              | ServeCmd
@@ -70,6 +70,7 @@ data Options = Options
     , optDownloadConcurrency :: Int
     , optChunkSize           :: Integer
     , optReferenceDir        :: Maybe FilePath
+    -- , optYear                :: Maybe String
     , optCommand             :: Command
     } deriving Show
 
@@ -83,6 +84,7 @@ defaultOptions = Options
     , optChunkSize = 6*1024*1024
     , optReferenceDir = Nothing
     , optCommand  = AuthCmd -- this should not be used
+    --  , optYear = Just "2022"
     }
 
 data Env = Env
