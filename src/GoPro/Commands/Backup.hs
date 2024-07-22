@@ -48,10 +48,10 @@ import           Data.Time.Format
 import           Network.HTTP.Simple             (getResponseBody, httpSource, parseRequest)
 import           Safe.Exact                      (zipWithExactMay)
 import qualified Shelly                          as Sh
-import           System.Directory                (createDirectoryIfMissing, doesFileExist, renameFile)
+import           System.Directory                (createDirectoryIfMissing, doesFileExist, renameFile,)
 import           System.Directory.PathWalk       (WalkStatus (..), pathWalkInterruptible)
 import           System.FilePath.Posix           (takeDirectory, takeExtension, takeFileName, (</>))
-import           System.Posix.Files              (createLink)
+import           System.Posix.Files              (createLink,setFileTimes)
 import           UnliftIO                        (concurrently, mapConcurrently, mapConcurrently_,
                                                   pooledMapConcurrentlyN_)
 
@@ -60,6 +60,7 @@ import           GoPro.DB
 import qualified GoPro.File                      as GPF
 import           GoPro.Plus.Media
 import           GoPro.S3
+import System.Directory.Extra
 
 retryRetrieve :: J.FromJSON j => MediumID -> GoPro j
 retryRetrieve mid = recoverAll policy $ \r -> do
@@ -97,28 +98,29 @@ downloadLocally path extract Medium{..} = do
   vars <- retryRetrieve _medium_id
   refdir <- asksOpt optReferenceDir
   locals <- fromMaybe mempty <$> traverse GPF.fromDirectoryFull refdir
-  let todo = extract _medium_id vars
+  let todo = extractVacio _medium_id vars
       srcs = maybe [] NE.toList $ Map.lookup (vars ^. filename) locals
       todo2 = filter (\(a,_,_) -> ("-var-" `isInfixOf` a)) (filter (\(a,_,_)-> ("-source" `isInfixOf` a)) todo)
-      --todo3 = if _medium_created_at >= ((read "2024-01-01")::UTCTime) then [] else todo2
+  logInfoL ["Completed todo ", tshow todo]
+  logInfoL ["Completed todo2 ", tshow todo2]
   copyLocal todo2 srcs
   pooledMapConcurrentlyN_ 5 downloadNew todo2
 
-  logInfoL ["Completed download ", tshow _medium_id]
+  logInfoL ["Completed downloads ", tshow _medium_id]
   liftIO $ do
     createDirectoryIfMissing True (takeDirectory midPath)
   
-  linkNames (filter ("-source" `isInfixOf`) . fmap (\(a,b,c) -> a) $ todo)
+  linkNames (filter ("-source" `isInfixOf`) . fmap (\(a,_,_) -> a) $ todo)
   -- -- removeDirectory midPath
   -- -- This is mildly confusing since the path inherently has the mid in the path.
-  -- liftIO $ do
-  --   createDirectoryIfMissing True (takeDirectory midPath)
-  --   renameDirectory (tmpdir </> unpack _medium_id) midPath
-  --   setFileTimes midPath (toEpochTime _medium_captured_at) (toEpochTime _medium_captured_at)
-  --   -- logInfoL ["Create Ren " , tshow  midPath ," ",tshow (tmpdir </> unpack _medium_id)]
-  --   liftIO $ system $ "rmdir " ++  midPath  
+  liftIO $ do
+    createDirectoryIfMissing True (takeDirectory midPath)
+    renameDirectory (tmpdir </> unpack _medium_id) midPath
+    setFileTimes midPath (toEpochTime _medium_captured_at) (toEpochTime _medium_captured_at)
+    -- logInfoL ["Create Ren " , tshow  midPath ," ",tshow (tmpdir </> unpack _medium_id)]
+    liftIO $ system $ "rmdir " ++  midPath  
   
-  -- logInfoL ["Completed backup of ", tshow midPath]
+  logInfoL ["Completed backup of ", tshow midPath]
   where
     midPath = path </> formatTime defaultTimeLocale "%0Y/%m/%d" _medium_captured_at </> unpack _medium_id
     tmpdir = path </> "tmp"
@@ -134,7 +136,9 @@ downloadLocally path extract Medium{..} = do
     copyLocal :: [(Text, String, String)] -> [GPF.File] -> GoPro ()
     copyLocal devs refs = do
       let srcdevs = sort $ mapMaybe (\(a,_,_) -> if "-var-source" `isInfixOf` a then Just a else Nothing) devs
-
+      -- logDbgL (tshow devs)
+      -- logDbgL (tshow srcdevs)
+      -- logDbgL (tshow srcdevs)
       case zipWithExactMay (\a b -> (GPF._gpFilePath b, tmpFilename a)) srcdevs refs of
         Nothing      -> logDbgL ["no match ", tshow ((\(a,_,_) -> a) <$> devs), " ", tshow refs]
         Just aligned -> do
@@ -143,7 +147,7 @@ downloadLocally path extract Medium{..} = do
           traverse_ (\(s,d) -> store d (\t -> liftIO $ asum [createLink s t,
                                                              Sh.shelly (Sh.cp s t)
                                                             ])) aligned
-
+    toEpochTime = fromIntegral @Int . floor . utcTimeToPOSIXSeconds
     downloadNew argh@(k, _, _) = store (tmpFilename k) $ download argh
 
     download (k, _, u) dest = recoverAll policy $ \r -> do
@@ -171,10 +175,9 @@ downloadLocally path extract Medium{..} = do
         logDbgL ["MP ", tshow (midPath)]
         _ <- liftIO . optional $ renameFile existing new
         liftIO . optional $ system $ "mv " ++ (takeDirectory new) ++ "/* " ++ " " ++ (takeDirectory midPath)  
-        -- sliftIO . optional $ system $ "rmdir " ++  midPath  
-        
-    toEpochTime = fromIntegral @Int . floor . utcTimeToPOSIXSeconds
-
+        -- sliftIO . optional $ system $ "rmdir " ++  midPath
+extractVacio :: Extractor 
+extractVacio mid fi = extractMedia mid fi
 
 extractMedia :: Extractor
 extractMedia mid fi = filter desirable . nubBy (\(_,_,u1) (_,_,u2) -> u1 == u2) $
