@@ -19,7 +19,6 @@
 # resolver: https://example.com/snapshots/2018-01-01.yaml
 #clts-22.15
 resolver: lts-22.16
-#resolver: lts-22.31
 
 allow-newer: true
 notify-if-nix-on-path: false
